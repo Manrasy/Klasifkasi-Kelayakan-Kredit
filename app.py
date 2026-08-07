@@ -9,39 +9,75 @@ import os
 # KONFIGURASI MODEL
 # ==================================================
 
-MODEL_URL = "https://huggingface.co/spaces/RSYD21/Kelayakan_Kredit/resolve/main/credit_model.pkl"
+RF_URL = (
+    "https://huggingface.co/spaces/RSYD21/Kelayakan_Kredit/"
+    "resolve/main/random_forest.pkl"
+)
 
-MODEL_PATH = "credit_model.pkl"
+ENCODER_URL = (
+    "https://huggingface.co/spaces/RSYD21/Kelayakan_Kredit/"
+    "resolve/main/encoder.pkl"
+)
+
+SCALER_URL = (
+    "https://huggingface.co/spaces/RSYD21/Kelayakan_Kredit/"
+    "resolve/main/scaler.pkl"
+)
+
+
+RF_PATH = "random_forest.pkl"
+ENCODER_PATH = "encoder.pkl"
+SCALER_PATH = "scaler.pkl"
+
 
 
 # ==================================================
-# LOAD MODEL PIPELINE
+# LOAD MODEL
 # ==================================================
 
 @st.cache_resource
-def load_model():
+def load_models():
 
-    if not os.path.exists(MODEL_PATH):
-
-        response = requests.get(MODEL_URL)
-
-        if response.status_code == 200:
-
-            with open(MODEL_PATH, "wb") as file:
-                file.write(response.content)
-
-        else:
-            st.error("Gagal mengambil model dari Hugging Face")
-            st.stop()
+    files = [
+        (RF_URL, RF_PATH),
+        (ENCODER_URL, ENCODER_PATH),
+        (SCALER_URL, SCALER_PATH)
+    ]
 
 
-    model = joblib.load(MODEL_PATH)
+    for url, path in files:
 
-    return model
+        if not os.path.exists(path):
+
+            response = requests.get(url)
+
+            if response.status_code == 200:
+
+                with open(path, "wb") as file:
+                    file.write(response.content)
+
+            else:
+
+                st.error(
+                    f"Gagal mengambil file {path}"
+                )
+
+                st.stop()
 
 
 
-model = load_model()
+    rf = joblib.load(RF_PATH)
+
+    encoders = joblib.load(ENCODER_PATH)
+
+    scaler = joblib.load(SCALER_PATH)
+
+
+    return rf, encoders, scaler
+
+
+
+rf, encoders, scaler = load_models()
 
 
 
@@ -61,14 +97,17 @@ st.set_page_config(
 # HEADER
 # ==================================================
 
-st.title("💳 Sistem Klasifikasi Kelayakan Kredit")
+st.title(
+    "💳 Sistem Klasifikasi Kelayakan Kredit"
+)
+
 
 st.write(
-    """
-    Aplikasi ini menggunakan algoritma **Random Forest**
-    untuk melakukan prediksi kelayakan kredit berdasarkan
-    karakteristik calon nasabah.
-    """
+"""
+Aplikasi ini menggunakan algoritma **Random Forest**
+untuk melakukan klasifikasi kelayakan kredit
+berdasarkan karakteristik calon nasabah.
+"""
 )
 
 
@@ -80,13 +119,17 @@ st.divider()
 # INPUT DATA NASABAH
 # ==================================================
 
-st.subheader("📌 Input Data Calon Nasabah")
+st.subheader(
+    "📌 Input Data Calon Nasabah"
+)
 
 
 col1, col2, col3 = st.columns(3)
 
 
+
 with col1:
+
 
     usia = st.number_input(
         "Usia",
@@ -136,7 +179,9 @@ with col1:
     )
 
 
+
 with col2:
+
 
     aset_tabungan = st.number_input(
         "Aset Tabungan",
@@ -181,6 +226,7 @@ with col2:
             "Bisnis"
         ]
     )
+
 
 
 with col3:
@@ -247,8 +293,6 @@ if st.button(
 ):
 
 
-    # Membuat dataframe sesuai fitur training
-
     data_input = pd.DataFrame({
 
         "usia":[usia],
@@ -297,56 +341,103 @@ if st.button(
 
 
 
-    # Prediksi
-
-    prediction = model.predict(data_input)
-
-    probability = model.predict_proba(data_input)
+    try:
 
 
+        # ==========================================
+        # ENCODING
+        # ==========================================
 
-    hasil = prediction[0]
-
-
-
-    tingkat_keyakinan = (
-        max(probability[0]) * 100
-    )
-
+        for col in data_input.select_dtypes(
+            include="object"
+        ).columns:
 
 
-    st.subheader("📊 Hasil Prediksi")
+            data_input[col] = encoders[col].transform(
+                data_input[col]
+            )
 
 
 
-    # Sesuaikan dengan label dataset Anda
+        # ==========================================
+        # SCALING
+        # ==========================================
 
-    if hasil == 1:
-
-        st.success(
-            "✅ Nasabah Layak Kredit"
+        data_scaled = scaler.transform(
+            data_input
         )
 
 
-    else:
+
+        # ==========================================
+        # RANDOM FOREST PREDICTION
+        # ==========================================
+
+        prediction = rf.predict(
+            data_scaled
+        )
+
+
+        probability = rf.predict_proba(
+            data_scaled
+        )
+
+
+
+        hasil = prediction[0]
+
+
+        confidence = (
+            max(probability[0]) * 100
+        )
+
+
+
+        # ==========================================
+        # OUTPUT
+        # ==========================================
+
+        st.subheader(
+            "📊 Hasil Prediksi"
+        )
+
+
+        if hasil == 1:
+
+            st.success(
+                "✅ Nasabah Layak Kredit"
+            )
+
+        else:
+
+            st.error(
+                "❌ Nasabah Tidak Layak Kredit"
+            )
+
+
+
+        st.metric(
+            "Tingkat Keyakinan Model",
+            f"{confidence:.2f}%"
+        )
+
+
+
+        st.subheader(
+            "Detail Input"
+        )
+
+
+        st.dataframe(
+            data_input,
+            use_container_width=True
+        )
+
+
+
+    except Exception as e:
+
 
         st.error(
-            "❌ Nasabah Tidak Layak Kredit"
+            f"Terjadi kesalahan saat prediksi: {e}"
         )
-
-
-
-    st.metric(
-        "Tingkat Keyakinan Model",
-        f"{tingkat_keyakinan:.2f}%"
-    )
-
-
-
-    st.subheader("Detail Input")
-
-
-    st.dataframe(
-        data_input,
-        use_container_width=True
-    )
