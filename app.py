@@ -1,9 +1,8 @@
-import os
+from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
 
 # ==================================================
@@ -16,15 +15,13 @@ st.set_page_config(
 )
 
 # ==================================================
-# KONFIGURASI MODEL
+# KONFIGURASI MODEL (file .pkl ada di repo, satu folder dengan app.py)
 # ==================================================
-BASE_URL = "https://huggingface.co/spaces/RSYD21/Kelayakan_Kredit/resolve/main/"
+BASE_DIR = Path(__file__).parent
 
-FILES = {
-    "rf": ("random_forest.pkl", BASE_URL + "random_forest.pkl"),
-    "encoder": ("encoder.pkl", BASE_URL + "encoder.pkl"),
-    "scaler": ("scaler.pkl", BASE_URL + "scaler.pkl"),
-}
+RF_PATH = BASE_DIR / "random_forest.pkl"
+ENCODER_PATH = BASE_DIR / "encoder.pkl"
+SCALER_PATH = BASE_DIR / "scaler.pkl"
 
 # Urutan kolom bawaan (dipakai jika model tidak menyimpan nama kolom)
 DEFAULT_FEATURES = [
@@ -67,17 +64,16 @@ def norm(s):
 
 @st.cache_resource(show_spinner="Memuat model...")
 def load_models():
-    for url_key in FILES.values():
-        path, url = url_key
-        if not os.path.exists(path):
-            response = requests.get(url, timeout=120)
-            response.raise_for_status()
-            with open(path, "wb") as f:
-                f.write(response.content)
+    for path in (RF_PATH, ENCODER_PATH, SCALER_PATH):
+        if not path.exists():
+            raise FileNotFoundError(
+                f"File {path.name} tidak ada di repo. "
+                f"Upload ke folder yang sama dengan app.py."
+            )
 
-    rf = joblib.load(FILES["rf"][0])
-    encoders = joblib.load(FILES["encoder"][0])
-    scaler = joblib.load(FILES["scaler"][0])
+    rf = joblib.load(RF_PATH)
+    encoders = joblib.load(ENCODER_PATH)
+    scaler = joblib.load(SCALER_PATH)
     return rf, encoders, scaler
 
 
@@ -137,11 +133,11 @@ def encode_value(encoders, col, df):
         idx = [norm(n) for n in cols_enc].index(norm(col))
         return hasil[:, idx]
 
-    raise KeyError(
-        f"Encoder untuk '{col}' tidak ditemukan. "
-        f"Kunci tersedia: "
-        f"{list(encoders.keys()) if isinstance(encoders, dict) else type(encoders)}"
-    )
+    # encoder.pkl kosong: tebakan terbaik = LabelEncoder bawaan (urut abjad)
+    opsi = sorted(DEFAULT_OPTIONS[next(c for c in DEFAULT_OPTIONS if norm(c) == norm(col))])
+    nilai = df[col].iloc[0]
+    st.session_state["fallback_encoding"] = True
+    return [opsi.index(nilai)]
 
 
 def feature_order(rf, scaler):
@@ -272,9 +268,21 @@ if st.button("🔍 Prediksi Kelayakan Kredit", use_container_width=True):
         urutan = feature_order(rf, scaler)
 
         baris = {}
+        st.session_state["fallback_encoding"] = False
+
         for nama in urutan:
             kunci = peta_input.get(norm(nama))
             if kunci is None:
+                # Kolom hasil one-hot, mis. "status_pekerjaan_Tetap"
+                for cat in CATEGORICAL:
+                    if str(nama).lower().startswith(cat.lower() + "_"):
+                        kategori = str(nama)[len(cat) + 1:]
+                        baris[nama] = [
+                            1.0 if norm(nilai_input[cat]) == norm(kategori) else 0.0
+                        ]
+                        break
+                if nama in baris:
+                    continue
                 raise KeyError(
                     f"Fitur '{nama}' dari model tidak ada di form. "
                     f"Fitur form: {list(nilai_input.keys())}"
@@ -290,6 +298,12 @@ if st.button("🔍 Prediksi Kelayakan Kredit", use_container_width=True):
                 data_input[col] = encode_value(encoders, col, data_input)
 
         data_input = data_input.astype(float)
+
+        if st.session_state.get("fallback_encoding"):
+            st.warning(
+                "encoder.pkl kosong, jadi kolom kategori di-encode urut abjad "
+                "(tebakan). Pastikan sama dengan saat training."
+            )
 
         # Scaling
         if getattr(scaler, "feature_names_in_", None) is not None:
@@ -339,11 +353,8 @@ if st.button("🔍 Prediksi Kelayakan Kredit", use_container_width=True):
             st.write("Tipe encoders:", str(type(encoders)))
             if isinstance(encoders, dict):
                 st.write("Kunci encoders:", list(encoders.keys()))
-            st.write(
-                "Fitur scaler:",
-                list(getattr(scaler, "feature_names_in_", []) or []),
-            )
-            st.write(
-                "Fitur RF:",
-                list(getattr(rf, "feature_names_in_", []) or []),
-            )
+            fs = getattr(scaler, "feature_names_in_", None)
+            fr = getattr(rf, "feature_names_in_", None)
+            st.write("Fitur scaler:", [] if fs is None else list(fs))
+            st.write("Fitur RF:", [] if fr is None else list(fr))
+            st.write("Jumlah fitur scaler:", getattr(scaler, "n_features_in_", None))
